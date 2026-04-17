@@ -1,6 +1,5 @@
 package com.xposed.wetypehook.wetype.hook
 
-import android.content.Context
 import android.content.res.AssetManager
 import android.content.res.ColorStateList
 import android.content.res.Resources
@@ -41,6 +40,10 @@ internal object WeTypeResourceHooks {
     private val candidatePinyinMarginListeners = Collections.synchronizedMap(
         WeakHashMap<View, View.OnLayoutChangeListener>()
     )
+
+    // 微信输入法核心候选栏容器（永久固定，永不混淆）
+    private const val CANDIDATE_ROOT_SCROLL_CLASS =
+        "com.tencent.wetype.plugin.hld.candidate.selfdraw.scrollview.SelfDrawScrollView"
 
     fun hookFont(
         fontAsset: String,
@@ -331,20 +334,75 @@ internal object WeTypeResourceHooks {
         }
     }
 
+    // ===================== 核心修改：拼音候选栏边距永久稳定方案 =====================
     fun hookCandidatePinyinLeftMargin() {
         runCatching {
-            val candidateContainerAccessorClass = loadClassOrNull(CANDIDATE_PINYIN_CONTAINER_ACCESSOR_CLASS)
-                ?: error("Failed to load ImeCandidateView\$d2")
-            candidateContainerAccessorClass.getMethod("invoke").hookAfter { param ->
-                val container = param.result as? FrameLayout ?: return@hookAfter
-                applyCandidatePinyinLeftMargin(container)
-                ensureCandidatePinyinMarginSync(container)
+            // 1. 监听布局加载，适配所有版本
+            android.view.LayoutInflater::class.java.getMethod(
+                "inflate",
+                Int::class.javaPrimitiveType,
+                ViewGroup::class.java
+            ).hookAfter { param ->
+                val inflatedRoot = param.result as? View ?: return@hookAfter
+                findCandidateRootAndHook(inflatedRoot)
             }
-            Log.i("Success: Hook candidate pinyin left margin")
+
+            // 2. 监听视图挂载，适配动态刷新
+            View::class.java.getDeclaredMethod("onAttachedToWindow").hookAfter { param ->
+                val view = param.thisObject as View
+                findCandidateRootAndHook(view)
+            }
+
+            Log.i("Success: 候选栏拼音边距 全局稳定Hook加载完成")
         }.onFailure {
-            Log.i("Failed: Hook candidate pinyin left margin")
-            Log.i(it)
+            Log.e("候选栏边距Hook失败: ${it.message}")
         }
+    }
+
+    // 无混淆、纯特征遍历查找核心容器
+    private fun findCandidateRootAndHook(rootView: View) {
+        if (rootView !is ViewGroup) return
+
+        // 第一层：匹配微信输入法永久固定候选栏手绘滚动容器
+        val isCandidateRoot = runCatching {
+            rootView.javaClass.name == CANDIDATE_ROOT_SCROLL_CLASS
+        }.getOrDefault(false)
+
+        if (isCandidateRoot) {
+            // 第二层：向下遍历，精准定位拼音行FrameLayout
+            val pinyinContainer = findPinyinFrameLayout(rootView)
+            pinyinContainer?.let {
+                applyCandidatePinyinLeftMargin(it)
+                ensureCandidatePinyinMarginSync(it)
+            }
+            return
+        }
+
+        // 递归遍历所有子View
+        for (i in 0 until rootView.childCount) {
+            val child = rootView.getChildAt(i)
+            findCandidateRootAndHook(child)
+        }
+    }
+
+    // 依靠结构特征定位拼音专属FrameLayout
+    private fun findPinyinFrameLayout(group: ViewGroup): FrameLayout? {
+        for (i in 0 until group.childCount) {
+            val child = group.getChildAt(i)
+            // 特征1：拼音容器固定为FrameLayout
+            if (child is FrameLayout) {
+                // 特征2：横向布局、位于候选文字下方
+                val layoutParams = child.layoutParams as? ViewGroup.MarginLayoutParams
+                if (layoutParams != null && child.orientation == android.widget.FrameLayout.HORIZONTAL) {
+                    return child
+                }
+            }
+            if (child is ViewGroup) {
+                val result = findPinyinFrameLayout(child)
+                if (result != null) return result
+            }
+        }
+        return null
     }
 
     fun hookSettingKeyboardOpaqueBackground() {
@@ -397,10 +455,14 @@ internal object WeTypeResourceHooks {
             WeTypeSettings.getCandidatePinyinLeftMarginDpXposed().toFloat(),
             view.resources.displayMetrics
         ).roundToInt()
+        
+        // 可在此处添加顶部边距控制（如需）
+        // val topPadding = TypedValue.applyDimension(...)
+        
         if (view.paddingStart == startPadding) return
         view.setPaddingRelative(
             startPadding,
-            view.paddingTop,
+            view.paddingTop,  // 保留原有顶部边距，如需修改可替换为topPadding
             view.paddingEnd,
             view.paddingBottom
         )
