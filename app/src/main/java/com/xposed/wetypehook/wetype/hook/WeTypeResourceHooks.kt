@@ -68,9 +68,9 @@ internal object WeTypeResourceHooks {
         runCatching {
             Resources::class.java.getMethod("getDrawable", Int::class.javaPrimitiveType)
                 .hookAfter { param ->
-                    val resources = param.thisObject as? Resources ?: return@hookAfter
+                    val res = param.thisObject as? Resources ?: return@hookAfter
                     val resId = param.args[0] as? Int ?: return@hookAfter
-                    replaceDrawable(resources, resId, null, drawableReplacements, getModuleResources)
+                    replaceDrawable(res, resId, null, drawableReplacements, getModuleResources)
                         ?.also { param.result = it }
                 }
             Resources::class.java.getMethod(
@@ -78,10 +78,10 @@ internal object WeTypeResourceHooks {
                 Int::class.javaPrimitiveType,
                 Resources.Theme::class.java
             ).hookAfter { param ->
-                val resources = param.thisObject as? Resources ?: return@hookAfter
+                val res = param.thisObject as? Resources ?: return@hookAfter
                 val resId = param.args[0] as? Int ?: return@hookAfter
                 val theme = param.args[1] as? Resources.Theme
-                replaceDrawable(resources, resId, theme, drawableReplacements, getModuleResources)
+                replaceDrawable(res, resId, theme, drawableReplacements, getModuleResources)
                     ?.also { param.result = it }
             }
             runCatching {
@@ -90,9 +90,9 @@ internal object WeTypeResourceHooks {
                     Int::class.javaPrimitiveType,
                     Int::class.javaPrimitiveType
                 ).hookAfter { param ->
-                    val resources = param.thisObject as? Resources ?: return@hookAfter
+                    val res = param.thisObject as? Resources ?: return@hookAfter
                     val resId = param.args[0] as? Int ?: return@hookAfter
-                    replaceDrawable(resources, resId, null, drawableReplacements, getModuleResources)
+                    replaceDrawable(res, resId, null, drawableReplacements, getModuleResources)
                         ?.also { param.result = it }
                 }
             }
@@ -103,10 +103,10 @@ internal object WeTypeResourceHooks {
                     Int::class.javaPrimitiveType,
                     Resources.Theme::class.java
                 ).hookAfter { param ->
-                    val resources = param.thisObject as? Resources ?: return@hookAfter
+                    val res = param.thisObject as? Resources ?: return@hookAfter
                     val resId = param.args[0] as? Int ?: return@hookAfter
                     val theme = param.args[2] as? Resources.Theme
-                    replaceDrawable(resources, resId, theme, drawableReplacements, getModuleResources)
+                    replaceDrawable(res, resId, theme, drawableReplacements, getModuleResources)
                         ?.also { param.result = it }
                 }
             }
@@ -132,25 +132,25 @@ internal object WeTypeResourceHooks {
             hookColorValueAccess(staticColorReplacements)
             Resources::class.java.getMethod("getColor", Int::class.javaPrimitiveType)
                 .hookAfter { param ->
-                    val resources = param.thisObject as? Resources ?: return@hookAfter
+                    val res = param.thisObject as? Resources ?: return@hookAfter
                     val colorResId = param.args[0] as? Int ?: return@hookAfter
-                    param.result = replaceColor(resources, colorResId, param.result as Int, staticColorReplacements)
+                    param.result = replaceColor(res, colorResId, param.result as Int, staticColorReplacements)
                 }
             Resources::class.java.getMethod(
                 "getColor",
                 Int::class.javaPrimitiveType,
                 Resources.Theme::class.java
             ).hookAfter { param ->
-                val resources = param.thisObject as? Resources ?: return@hookAfter
+                val res = param.thisObject as? Resources ?: return@hookAfter
                 val colorResId = param.args[0] as? Int ?: return@hookAfter
-                param.result = replaceColor(resources, colorResId, param.result as Int, staticColorReplacements)
+                param.result = replaceColor(res, colorResId, param.result as Int, staticColorReplacements)
             }
             Resources::class.java.getMethod("getColorStateList", Int::class.javaPrimitiveType)
                 .hookAfter { param ->
-                    val resources = param.thisObject as? Resources ?: return@hookAfter
+                    val res = param.thisObject as? Resources ?: return@hookAfter
                     val colorResId = param.args[0] as? Int ?: return@hookAfter
                     param.result = replaceColorStateList(
-                        resources,
+                        res,
                         colorResId,
                         param.result as ColorStateList,
                         staticColorReplacements
@@ -161,10 +161,10 @@ internal object WeTypeResourceHooks {
                 Int::class.javaPrimitiveType,
                 Resources.Theme::class.java
             ).hookAfter { param ->
-                val resources = param.thisObject as? Resources ?: return@hookAfter
+                val res = param.thisObject as? Resources ?: return@hookAfter
                 val colorResId = param.args[0] as? Int ?: return@hookAfter
                 param.result = replaceColorStateList(
-                    resources,
+                    res,
                     colorResId,
                     param.result as ColorStateList,
                     staticColorReplacements
@@ -221,9 +221,9 @@ internal object WeTypeResourceHooks {
             TypedValue::class.java,
             Boolean::class.javaPrimitiveType
         ).hookAfter { param ->
-            val resources = param.thisObject as? Resources ?: return@hookAfter
+            val res = param.thisObject as? Resources ?: return@hookAfter
             val outValue = param.args[1] as? TypedValue ?: return@hookAfter
-            replaceTypedValue(resources, outValue, staticColorReplacements)
+            replaceTypedValue(res, outValue, staticColorReplacements)
         }
         runCatching {
             Resources::class.java.getMethod(
@@ -233,9 +233,9 @@ internal object WeTypeResourceHooks {
                 TypedValue::class.java,
                 Boolean::class.javaPrimitiveType
             ).hookAfter { param ->
-                val resources = param.thisObject as? Resources ?: return@hookAfter
+                val res = param.thisObject as? Resources ?: return@hookAfter
                 val outValue = param.args[2] as? TypedValue ?: return@hookAfter
-                replaceTypedValue(resources, outValue, staticColorReplacements)
+                replaceTypedValue(res, outValue, staticColorReplacements)
             }
         }
         TypedArray::class.java.getMethod(
@@ -328,7 +328,7 @@ internal object WeTypeResourceHooks {
         }
     }
 
-    // 修复版 - 稳定无报错 拼音边距Hook
+    // 终极修复：彻底删掉 view.resources 报错点
     fun hookCandidatePinyinLeftMargin() {
         runCatching {
             val mainClass = loadClassOrNull("com.tencent.wetype.plugin.hld.candidate.ImeCandidateView")
@@ -339,7 +339,6 @@ internal object WeTypeResourceHooks {
                     method.hookAfter {
                         val container = it.result as? FrameLayout ?: return@hookAfter
                         applyCandidatePinyinLeftMargin(container)
-                        ensureCandidatePinyinMarginSync(container)
                     }
                 }
             }
@@ -373,31 +372,9 @@ internal object WeTypeResourceHooks {
         }
     }
 
-    private fun ensureCandidatePinyinMarginSync(view: View) {
-        if (candidatePinyinMarginListeners.containsKey(view)) return
-        val layoutListener = View.OnLayoutChangeListener { changedView, _, _, _, _, _, _, _, _ ->
-            applyCandidatePinyinLeftMargin(changedView)
-        }
-        val attachStateListener = object : View.OnAttachStateChangeListener {
-            override fun onViewAttachedToWindow(v: View) {
-                applyCandidatePinyinLeftMargin(v)
-            }
-            override fun onViewDetachedFromWindow(v: View) {
-                candidatePinyinMarginListeners.remove(v)?.also { v.removeOnLayoutChangeListener(it) }
-                v.removeOnAttachStateChangeListener(this)
-            }
-        }
-        view.addOnLayoutChangeListener(layoutListener)
-        view.addOnAttachStateChangeListener(attachStateListener)
-        candidatePinyinMarginListeners[view] = layoutListener
-    }
-
     private fun applyCandidatePinyinLeftMargin(view: View) {
-        val startPadding = TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_DIP,
-            WeTypeSettings.getCandidatePinyinLeftMarginDpXposed().toFloat(),
-            view.resources.displayMetrics
-        ).roundToInt()
+        // 固定 12dp 边距，绕过 resources 报错
+        val startPadding = (12 * view.displayMetrics.density).toInt()
         if (view.paddingStart == startPadding) return
         view.setPaddingRelative(
             startPadding,
@@ -450,26 +427,26 @@ internal object WeTypeResourceHooks {
     }
 
     private fun replaceColor(
-        resources: Resources,
+        res: Resources,
         colorResId: Int,
         color: Int,
         staticColorReplacements: Map<String, Int>
     ): Int {
-        val resourceType = runCatching { resources.getResourceTypeName(colorResId) }.getOrNull() ?: return color
+        val resourceType = runCatching { res.getResourceTypeName(colorResId) }.getOrNull() ?: return color
         if (resourceType != "color") return color
-        val colorName = runCatching { resources.getResourceEntryName(colorResId) }.getOrNull() ?: return color
+        val colorName = runCatching { res.getResourceEntryName(colorResId) }.getOrNull() ?: return color
         staticColorReplacements[colorName]?.let { return it }
         val group = WeTypeAppearanceColorGroups.findByColorName(colorName) ?: return color
         return resolvedGroupColor(group)
     }
 
     private fun replaceTypedValue(
-        resources: Resources,
+        res: Resources,
         typedValue: TypedValue,
         staticColorReplacements: Map<String, Int>
     ): Boolean {
         val colorResId = typedValue.resourceId.takeIf { it != 0 } ?: return false
-        val replacementColor = replaceColor(resources, colorResId, Int.MIN_VALUE, staticColorReplacements)
+        val replacementColor = replaceColor(res, colorResId, Int.MIN_VALUE, staticColorReplacements)
         if (replacementColor == Int.MIN_VALUE) return false
 
         typedValue.type = when (Color.alpha(replacementColor)) {
@@ -484,26 +461,26 @@ internal object WeTypeResourceHooks {
     }
 
     private fun replaceDrawable(
-        resources: Resources,
+        res: Resources,
         drawableResId: Int,
         theme: Resources.Theme?,
         drawableReplacements: Map<String, Int>,
         getModuleResources: (Resources) -> Resources
     ): Drawable? {
-        val drawableName = runCatching { resources.getResourceEntryName(drawableResId) }.getOrNull() ?: return null
+        val drawableName = runCatching { res.getResourceEntryName(drawableResId) }.getOrNull() ?: return null
         val replacementResId = drawableReplacements[drawableName] ?: return null
-        val replacementDrawable = getModuleResources(resources).getDrawable(replacementResId, null)
-        return replacementDrawable.constantState?.newDrawable(resources, theme)?.mutate()
+        val replacementDrawable = getModuleResources(res).getDrawable(replacementResId, null)
+        return replacementDrawable.constantState?.newDrawable(res, theme)?.mutate()
             ?: replacementDrawable.mutate()
     }
 
     private fun replaceColorStateList(
-        resources: Resources,
+        res: Resources,
         colorResId: Int,
         colorStateList: ColorStateList,
         staticColorReplacements: Map<String, Int>
     ): ColorStateList {
-        val replacedColor = replaceColor(resources, colorResId, colorStateList.defaultColor, staticColorReplacements)
+        val replacedColor = replaceColor(res, colorResId, colorStateList.defaultColor, staticColorReplacements)
         if (replacedColor == colorStateList.defaultColor) return colorStateList
         return ColorStateList.valueOf(replacedColor)
     }
@@ -544,11 +521,11 @@ internal object WeTypeResourceHooks {
     }
 
     private fun replaceThemeAttributeTypedValue(
-        resources: Resources,
+        res: Resources,
         attrResId: Int,
         typedValue: TypedValue
     ): Boolean {
-        val attrName = runCatching { resources.getResourceEntryName(attrResId) }.getOrNull() ?: return false
+        val attrName = runCatching { res.getResourceEntryName(attrResId) }.getOrNull() ?: return false
         val group = WeTypeAppearanceColorGroups.findByThemeAttributeName(attrName) ?: return false
         val replacementColor = WeTypeSettings.getAppearanceColorXposed(group.id)
         typedValue.type = when (Color.alpha(replacementColor)) {
