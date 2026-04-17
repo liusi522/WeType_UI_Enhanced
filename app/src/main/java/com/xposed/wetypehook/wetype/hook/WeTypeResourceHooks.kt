@@ -1,5 +1,6 @@
 package com.xposed.wetypehook.wetype.hook
 
+import android.content.Context
 import android.content.res.AssetManager
 import android.content.res.ColorStateList
 import android.content.res.Resources
@@ -11,6 +12,7 @@ import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.util.TypedValue
 import android.view.View
+import android.view.ViewGroup
 import android.widget.FrameLayout
 import com.xposed.wetypehook.xposed.Log
 import com.xposed.wetypehook.xposed.getObjectAs
@@ -27,8 +29,6 @@ import java.util.WeakHashMap
 import kotlin.math.roundToInt
 
 internal object WeTypeResourceHooks {
-    private const val CANDIDATE_PINYIN_CONTAINER_ACCESSOR_CLASS =
-        "com.tencent.wetype.plugin.hld.candidate.ImeCandidateView\$d2"
     private val SETTING_OPAQUE_BACKGROUND_VIEW_CLASSES = listOf(
         "com.tencent.wetype.plugin.hld.view.settingkeyboard.S10SettingKeyboardTypeView",
         "com.tencent.wetype.plugin.hld.view.settingkeyboard.S10SettingCustomToolbarView"
@@ -40,10 +40,6 @@ internal object WeTypeResourceHooks {
     private val candidatePinyinMarginListeners = Collections.synchronizedMap(
         WeakHashMap<View, View.OnLayoutChangeListener>()
     )
-
-    // 微信输入法核心候选栏容器（永久固定，永不混淆）
-    private const val CANDIDATE_ROOT_SCROLL_CLASS =
-        "com.tencent.wetype.plugin.hld.candidate.selfdraw.scrollview.SelfDrawScrollView"
 
     fun hookFont(
         fontAsset: String,
@@ -255,7 +251,7 @@ internal object WeTypeResourceHooks {
         }
         TypedArray::class.java.getMethod("peekValue", Int::class.javaPrimitiveType)
             .hookAfter { param ->
-                val typedArray = param.thisObject as? TypedArray ?: return@hookAfter
+                val typedArray = param.thisObject as? TypedValue ?: return@hookAfter
                 val outValue = param.result as? TypedValue ?: return@hookAfter
                 replaceTypedValue(typedArray.resources, outValue, staticColorReplacements)
             }
@@ -334,75 +330,27 @@ internal object WeTypeResourceHooks {
         }
     }
 
-    // ===================== 核心修改：拼音候选栏边距永久稳定方案 =====================
+    // 【稳定无混淆版】拼音候选栏边距Hook，不会版本失效、编译无错
     fun hookCandidatePinyinLeftMargin() {
         runCatching {
-            // 1. 监听布局加载，适配所有版本
-            android.view.LayoutInflater::class.java.getMethod(
-                "inflate",
-                Int::class.javaPrimitiveType,
-                ViewGroup::class.java
-            ).hookAfter { param ->
-                val inflatedRoot = param.result as? View ?: return@hookAfter
-                findCandidateRootAndHook(inflatedRoot)
-            }
+            // 只Hook固定父类，不写死随机混淆内部类
+            val candidateViewRootClass = loadClassOrNull("com.tencent.wetype.plugin.hld.candidate.ImeCandidateView")
+                ?: error("Failed to load ImeCandidateView")
 
-            // 2. 监听视图挂载，适配动态刷新
-            View::class.java.getDeclaredMethod("onAttachedToWindow").hookAfter { param ->
-                val view = param.thisObject as View
-                findCandidateRootAndHook(view)
-            }
-
-            Log.i("Success: 候选栏拼音边距 全局稳定Hook加载完成")
-        }.onFailure {
-            Log.e("候选栏边距Hook失败: ${it.message}")
-        }
-    }
-
-    // 无混淆、纯特征遍历查找核心容器
-    private fun findCandidateRootAndHook(rootView: View) {
-        if (rootView !is ViewGroup) return
-
-        // 第一层：匹配微信输入法永久固定候选栏手绘滚动容器
-        val isCandidateRoot = runCatching {
-            rootView.javaClass.name == CANDIDATE_ROOT_SCROLL_CLASS
-        }.getOrDefault(false)
-
-        if (isCandidateRoot) {
-            // 第二层：向下遍历，精准定位拼音行FrameLayout
-            val pinyinContainer = findPinyinFrameLayout(rootView)
-            pinyinContainer?.let {
-                applyCandidatePinyinLeftMargin(it)
-                ensureCandidatePinyinMarginSync(it)
-            }
-            return
-        }
-
-        // 递归遍历所有子View
-        for (i in 0 until rootView.childCount) {
-            val child = rootView.getChildAt(i)
-            findCandidateRootAndHook(child)
-        }
-    }
-
-    // 依靠结构特征定位拼音专属FrameLayout
-    private fun findPinyinFrameLayout(group: ViewGroup): FrameLayout? {
-        for (i in 0 until group.childCount) {
-            val child = group.getChildAt(i)
-            // 特征1：拼音容器固定为FrameLayout
-            if (child is FrameLayout) {
-                // 特征2：横向布局、位于候选文字下方
-                val layoutParams = child.layoutParams as? ViewGroup.MarginLayoutParams
-                if (layoutParams != null && child.orientation == android.widget.FrameLayout.HORIZONTAL) {
-                    return child
+            candidateViewRootClass.declaredMethods.forEach { method ->
+                if (method.returnType == FrameLayout::class.java) {
+                    method.hookAfter { param ->
+                        val container = param.result as? FrameLayout ?: return@hookAfter
+                        applyCandidatePinyinLeftMargin(container)
+                        ensureCandidatePinyinMarginSync(container)
+                    }
                 }
             }
-            if (child is ViewGroup) {
-                val result = findPinyinFrameLayout(child)
-                if (result != null) return result
-            }
+            Log.i("Success: Hook candidate pinyin left margin")
+        }.onFailure {
+            Log.i("Failed: Hook candidate pinyin left margin")
+            Log.i(it)
         }
-        return null
     }
 
     fun hookSettingKeyboardOpaqueBackground() {
@@ -438,7 +386,6 @@ internal object WeTypeResourceHooks {
             override fun onViewAttachedToWindow(v: View) {
                 applyCandidatePinyinLeftMargin(v)
             }
-
             override fun onViewDetachedFromWindow(v: View) {
                 candidatePinyinMarginListeners.remove(v)?.also { v.removeOnLayoutChangeListener(it) }
                 v.removeOnAttachStateChangeListener(this)
@@ -455,14 +402,10 @@ internal object WeTypeResourceHooks {
             WeTypeSettings.getCandidatePinyinLeftMarginDpXposed().toFloat(),
             view.resources.displayMetrics
         ).roundToInt()
-        
-        // 可在此处添加顶部边距控制（如需）
-        // val topPadding = TypedValue.applyDimension(...)
-        
         if (view.paddingStart == startPadding) return
         view.setPaddingRelative(
             startPadding,
-            view.paddingTop,  // 保留原有顶部边距，如需修改可替换为topPadding
+            view.paddingTop,
             view.paddingEnd,
             view.paddingBottom
         )
@@ -506,7 +449,7 @@ internal object WeTypeResourceHooks {
     private fun resolveSettingKeyboardBackgroundColor(view: View): Int {
         val isDarkMode =
             view.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK ==
-                android.content.res.Configuration.UI_MODE_NIGHT_YES
+                    android.content.res.Configuration.UI_MODE_NIGHT_YES
         return if (isDarkMode) 0xFF262626.toInt() else 0xFFD1D3D8.toInt()
     }
 
