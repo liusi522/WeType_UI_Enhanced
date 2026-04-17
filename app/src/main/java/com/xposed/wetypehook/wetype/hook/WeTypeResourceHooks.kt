@@ -12,7 +12,6 @@ import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.util.TypedValue
 import android.view.View
-import android.view.ViewGroup
 import android.widget.FrameLayout
 import com.xposed.wetypehook.xposed.Log
 import com.xposed.wetypehook.xposed.getObjectAs
@@ -294,7 +293,6 @@ internal object WeTypeResourceHooks {
             }
 
             imeButtonClass.getMethod("Y").hookReturnConstant(Color.TRANSPARENT)
-
             Log.i("Success: Hook WeType self-draw key colors")
         }.onFailure {
             Log.i("Failed: Hook WeType self-draw key colors")
@@ -330,17 +328,16 @@ internal object WeTypeResourceHooks {
         }
     }
 
-    // 【稳定无混淆版】拼音候选栏边距Hook，不会版本失效、编译无错
+    // 修复版 - 稳定无报错 拼音边距Hook
     fun hookCandidatePinyinLeftMargin() {
         runCatching {
-            // 只Hook固定父类，不写死随机混淆内部类
-            val candidateViewRootClass = loadClassOrNull("com.tencent.wetype.plugin.hld.candidate.ImeCandidateView")
-                ?: error("Failed to load ImeCandidateView")
+            val mainClass = loadClassOrNull("com.tencent.wetype.plugin.hld.candidate.ImeCandidateView")
+                ?: return@runCatching
 
-            candidateViewRootClass.declaredMethods.forEach { method ->
-                if (method.returnType == FrameLayout::class.java) {
-                    method.hookAfter { param ->
-                        val container = param.result as? FrameLayout ?: return@hookAfter
+            for (method in mainClass.declaredMethods) {
+                if (FrameLayout::class.java.isAssignableFrom(method.returnType)) {
+                    method.hookAfter {
+                        val container = it.result as? FrameLayout ?: return@hookAfter
                         applyCandidatePinyinLeftMargin(container)
                         ensureCandidatePinyinMarginSync(container)
                     }
@@ -349,7 +346,6 @@ internal object WeTypeResourceHooks {
             Log.i("Success: Hook candidate pinyin left margin")
         }.onFailure {
             Log.i("Failed: Hook candidate pinyin left margin")
-            Log.i(it)
         }
     }
 
