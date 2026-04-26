@@ -149,6 +149,9 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
         hookWeTypeTransparentColors()
         hookWeTypeXmlDrawables()
         hookWeTypeSelfDrawKeyColors()
+        hookWeTypeCandidateSpecialTextColor()
+        hookWeTypeCandidateBackgroundAlpha()
+        hookWeTypeCandidateBackgroundLeftMargin()
         hookWeTypeCandidateBackgroundCorner()
         hookWeTypeCandidatePinyinLeftMargin()
         hookWeTypeSettingKeyboardOpaqueBackground()
@@ -222,6 +225,7 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
             name == "attach" && parameterTypes.sameAs(Context::class.java)
         }.hookAfter { param ->
             val context = param.args[0] as? Context ?: return@hookAfter
+            WeTypeSettings.ensureHostSnapshot(context)
             notifyActivationHeartbeat(context, sourcePackage)
         }
 
@@ -230,6 +234,7 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }.hookAfter { param ->
             val service = param.thisObject as? InputMethodService ?: return@hookAfter
             if (service.packageName != sourcePackage) return@hookAfter
+            WeTypeSettings.ensureHostSnapshot(service)
             notifyActivationHeartbeat(service, sourcePackage)
         }
     }
@@ -265,6 +270,18 @@ class MainHook : IXposedHookLoadPackage, IXposedHookZygoteInit {
 
     private fun hookWeTypeSelfDrawKeyColors() {
         WeTypeResourceHooks.hookSelfDrawKeyColors()
+    }
+
+    private fun hookWeTypeCandidateSpecialTextColor() {
+        WeTypeResourceHooks.hookCandidateSpecialTextColor()
+    }
+
+    private fun hookWeTypeCandidateBackgroundAlpha() {
+        WeTypeResourceHooks.hookCandidateBackgroundAlpha()
+    }
+
+    private fun hookWeTypeCandidateBackgroundLeftMargin() {
+        WeTypeResourceHooks.hookCandidateBackgroundLeftMargin()
     }
 
     private fun hookWeTypeCandidateBackgroundCorner() {

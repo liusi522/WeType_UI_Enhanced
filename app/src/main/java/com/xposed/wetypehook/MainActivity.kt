@@ -420,9 +420,14 @@ private fun WeTypeSettingsScreen(
     var edgeHighlightEnabled by rememberSaveable { mutableStateOf(snapshot.edgeHighlightEnabled) }
     var edgeHighlightIntensity by rememberSaveable { mutableIntStateOf(snapshot.edgeHighlightIntensity) }
     var keyOpacity by rememberSaveable { mutableIntStateOf(snapshot.keyOpacity) }
-    var keyColorHookAlpha by rememberSaveable { mutableIntStateOf(snapshot.keyColorHookAlpha) }
+    var candidateBackgroundAlpha by rememberSaveable {
+        mutableIntStateOf(snapshot.candidateBackgroundAlpha)
+    }
     var candidateBackgroundCorner by rememberSaveable {
         mutableIntStateOf(snapshot.candidateBackgroundCorner.roundToInt())
+    }
+    var candidateBackgroundLeftMarginDp by rememberSaveable {
+        mutableStateOf(snapshot.candidateBackgroundLeftMarginDp.toString())
     }
     var candidatePinyinLeftMarginDp by rememberSaveable {
         mutableStateOf(snapshot.candidatePinyinLeftMarginDp.toString())
@@ -491,8 +496,10 @@ private fun WeTypeSettingsScreen(
             edgeHighlightEnabled = edgeHighlightEnabled,
             edgeHighlightIntensity = edgeHighlightIntensity,
             keyOpacity = keyOpacity,
-            keyColorHookAlpha = keyColorHookAlpha,
+            candidateBackgroundAlpha = candidateBackgroundAlpha,
             candidateBackgroundCorner = candidateBackgroundCorner.toFloat(),
+            candidateBackgroundLeftMarginDp = candidateBackgroundLeftMarginDp.toIntOrNull()
+                ?: WeTypeSettings.DEFAULT_CANDIDATE_BACKGROUND_LEFT_MARGIN_DP,
             candidatePinyinLeftMarginDp = candidatePinyinLeftMarginDp.toIntOrNull()
                 ?: WeTypeSettings.DEFAULT_CANDIDATE_PINYIN_LEFT_MARGIN_DP,
             appearanceColors = currentAppearanceColors(),
@@ -511,8 +518,10 @@ private fun WeTypeSettingsScreen(
         edgeHighlightEnabled = WeTypeSettings.DEFAULT_EDGE_HIGHLIGHT_ENABLED
         edgeHighlightIntensity = WeTypeSettings.DEFAULT_EDGE_HIGHLIGHT_INTENSITY
         keyOpacity = WeTypeSettings.DEFAULT_KEY_OPACITY
-        keyColorHookAlpha = WeTypeSettings.DEFAULT_KEY_COLOR_HOOK_ALPHA
+        candidateBackgroundAlpha = WeTypeSettings.DEFAULT_CANDIDATE_BACKGROUND_ALPHA
         candidateBackgroundCorner = WeTypeSettings.DEFAULT_CANDIDATE_BACKGROUND_CORNER.roundToInt()
+        candidateBackgroundLeftMarginDp =
+            WeTypeSettings.DEFAULT_CANDIDATE_BACKGROUND_LEFT_MARGIN_DP.toString()
         candidatePinyinLeftMarginDp = WeTypeSettings.DEFAULT_CANDIDATE_PINYIN_LEFT_MARGIN_DP.toString()
         disableHotUpdate = WeTypeSettings.DEFAULT_DISABLE_HOT_UPDATE
         appearanceGroups.forEachIndexed { index, group ->
@@ -775,6 +784,17 @@ private fun WeTypeSettingsScreen(
                         }
 
                         NumericTextSettingItem(
+                            title = stringResource(R.string.settings_candidate_background_left_margin_title),
+                            summary = stringResource(R.string.settings_candidate_background_left_margin_desc),
+                            value = candidateBackgroundLeftMarginDp,
+                            onValueChange = { input ->
+                                if (sanitizeIntegerInput(input, maxLength = 2) != null) {
+                                    candidateBackgroundLeftMarginDp = input
+                                }
+                            }
+                        )
+
+                        NumericTextSettingItem(
                             title = stringResource(R.string.settings_candidate_pinyin_margin_title),
                             summary = stringResource(R.string.settings_candidate_pinyin_margin_desc),
                             value = candidatePinyinLeftMarginDp,
@@ -787,9 +807,9 @@ private fun WeTypeSettingsScreen(
 
                         SliderPreferenceItem(
                             title = stringResource(R.string.settings_key_color_hook_alpha_title),
-                            value = keyColorHookAlpha,
+                            value = candidateBackgroundAlpha,
                             max = 255,
-                            onValueChange = { keyColorHookAlpha = it }
+                            onValueChange = { candidateBackgroundAlpha = it }
                         )
 
                         SliderPreferenceItem(
@@ -797,6 +817,26 @@ private fun WeTypeSettingsScreen(
                             value = candidateBackgroundCorner,
                             max = WeTypeSettings.MAX_CANDIDATE_BACKGROUND_CORNER,
                             onValueChange = { candidateBackgroundCorner = it }
+                        )
+                    }
+                }
+            }
+
+            // 其他分组
+            item {
+                SmallTitle(
+                    text = stringResource(R.string.settings_group_other)
+                )
+                Card(
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    insideMargin = PaddingValues(0.dp)
+                ) {
+                    Column {
+                        MiuixSwitchWidget(
+                            title = stringResource(R.string.settings_disable_hot_update_title),
+                            description = stringResource(R.string.settings_disable_hot_update_desc),
+                            checked = disableHotUpdate,
+                            onCheckedChange = { disableHotUpdate = it }
                         )
                     }
                 }
@@ -837,25 +877,6 @@ private fun WeTypeSettingsScreen(
                 }
             }
 
-            // 其他分组
-            item {
-                SmallTitle(
-                    text = stringResource(R.string.settings_group_other)
-                )
-                Card(
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                    insideMargin = PaddingValues(0.dp)
-                ) {
-                    Column {
-                        MiuixSwitchWidget(
-                            title = stringResource(R.string.settings_disable_hot_update_title),
-                            description = stringResource(R.string.settings_disable_hot_update_desc),
-                            checked = disableHotUpdate,
-                            onCheckedChange = { disableHotUpdate = it }
-                        )
-                    }
-                }
-            }
         }
     }
 }

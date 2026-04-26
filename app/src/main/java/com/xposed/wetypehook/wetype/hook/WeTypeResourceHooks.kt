@@ -14,6 +14,7 @@ import android.util.TypedValue
 import android.view.View
 import android.widget.FrameLayout
 import com.xposed.wetypehook.xposed.Log
+import com.xposed.wetypehook.xposed.findMethod
 import com.xposed.wetypehook.xposed.getObjectAs
 import com.xposed.wetypehook.xposed.hookAfter
 import com.xposed.wetypehook.xposed.hookBefore
@@ -28,6 +29,12 @@ import java.util.WeakHashMap
 import kotlin.math.roundToInt
 
 internal object WeTypeResourceHooks {
+    private const val CANDIDATE_SELF_VIEW_CLASS =
+        "com.tencent.wetype.plugin.hld.candidate.selfdraw.selfview.d"
+    private const val CANDIDATE_WITH_EXTRA_COMPANION_CLASS =
+        "com.tencent.wetype.plugin.hld.candidate.b\$a"
+    private const val CANDIDATE_ITEM_ROOT_CLASS =
+        "com.tencent.wetype.plugin.hld.candidate.selfdraw.scrollview.SelfDrawScrollView\$f"
     private const val CANDIDATE_PINYIN_CONTAINER_ACCESSOR_CLASS =
         "com.tencent.wetype.plugin.hld.candidate.ImeCandidateView\$d2"
     private val SETTING_OPAQUE_BACKGROUND_VIEW_CLASSES = listOf(
@@ -40,6 +47,9 @@ internal object WeTypeResourceHooks {
     )
     private val candidatePinyinMarginListeners = Collections.synchronizedMap(
         WeakHashMap<View, View.OnLayoutChangeListener>()
+    )
+    private val candidateItemRootBaseLeftPaddingPx = Collections.synchronizedMap(
+        WeakHashMap<Any, Int>()
     )
 
     fun hookFont(
@@ -303,11 +313,30 @@ internal object WeTypeResourceHooks {
         }
     }
 
+    fun hookCandidateSpecialTextColor() {
+        runCatching {
+            val candidateWithExtraCompanionClass =
+                loadClassOrNull(CANDIDATE_WITH_EXTRA_COMPANION_CLASS)
+                    ?: error("Failed to load CandidateWithExtra companion")
+            candidateWithExtraCompanionClass.findMethod {
+                name == "s" &&
+                    parameterTypes.size == 1 &&
+                    parameterTypes[0] == Int::class.javaPrimitiveType &&
+                    returnType == Int::class.javaPrimitiveType
+            }.hookAfter { param ->
+                param.result = WeTypeSettings.getAppearanceColorXposed("theme_color")
+            }
+            Log.i("Success: Hook candidate special text color")
+        }.onFailure {
+            Log.i("Failed: Hook candidate special text color")
+            Log.i(it)
+        }
+    }
+
     fun hookCandidateBackgroundCorner() {
         runCatching {
-            val candidateViewClass = loadClassOrNull(
-                "com.tencent.wetype.plugin.hld.candidate.selfdraw.selfview.d"
-            ) ?: error("Failed to load candidate self view")
+            val candidateViewClass = loadClassOrNull(CANDIDATE_SELF_VIEW_CLASS)
+                ?: error("Failed to load candidate self view")
             val cornerField = generateSequence(candidateViewClass as Class<*>?) { it.superclass }
                 .mapNotNull { clazz ->
                     runCatching { clazz.getDeclaredField("g") }.getOrNull()
@@ -327,6 +356,73 @@ internal object WeTypeResourceHooks {
             Log.i("Success: Hook candidate background corner")
         }.onFailure {
             Log.i("Failed: Hook candidate background corner")
+            Log.i(it)
+        }
+    }
+
+    fun hookCandidateBackgroundAlpha() {
+        runCatching {
+            val candidateViewClass = loadClassOrNull(CANDIDATE_SELF_VIEW_CLASS)
+                ?: error("Failed to load candidate self view")
+            val colorMethods = candidateViewClass.declaredMethods.filter { method ->
+                method.name == "g" &&
+                    method.parameterTypes.isEmpty() &&
+                    method.returnType == Int::class.javaPrimitiveType
+            }
+            check(colorMethods.isNotEmpty()) {
+                "Failed to find candidate background color method g"
+            }
+            colorMethods.forEach { method ->
+                method.hookAfter { param ->
+                    val color = param.result as? Int ?: return@hookAfter
+                    if (Color.alpha(color) == 0) return@hookAfter
+                    param.result = withForcedAlpha(
+                        color,
+                        WeTypeSettings.getCandidateBackgroundAlphaXposed()
+                    )
+                }
+            }
+            Log.i("Success: Hook candidate background alpha")
+        }.onFailure {
+            Log.i("Failed: Hook candidate background alpha")
+            Log.i(it)
+        }
+    }
+
+    fun hookCandidateBackgroundLeftMargin() {
+        runCatching {
+            val candidateItemRootClass = loadClassOrNull(CANDIDATE_ITEM_ROOT_CLASS)
+                ?: error("Failed to load candidate item root view")
+            val setInsetMethod = candidateItemRootClass.getMethod(
+                "b0",
+                Integer::class.java,
+                Integer::class.java,
+                Integer::class.java,
+                Integer::class.java
+            )
+            candidateItemRootClass.getMethod("N").hookBefore { param ->
+                val itemRoot = param.thisObject ?: return@hookBefore
+                val baseLeftPaddingPx = candidateItemRootBaseLeftPaddingPx.getOrPut(itemRoot) {
+                    runCatching { itemRoot.invokeMethodAs<Int>("p") }.getOrDefault(0)
+                }
+                val itemPosition = runCatching {
+                    itemRoot.invokeMethodAs<Int>("o0")
+                }.getOrNull() ?: return@hookBefore
+                val targetLeftPaddingPx =
+                    baseLeftPaddingPx + if (itemPosition == 0) {
+                        resolveCandidateBackgroundLeftMarginPx(itemRoot)
+                    } else {
+                        0
+                    }
+                val currentLeftPaddingPx = runCatching {
+                    itemRoot.invokeMethodAs<Int>("p")
+                }.getOrNull() ?: return@hookBefore
+                if (currentLeftPaddingPx == targetLeftPaddingPx) return@hookBefore
+                setInsetMethod.invoke(itemRoot, targetLeftPaddingPx, null, null, null)
+            }
+            Log.i("Success: Hook candidate background left margin")
+        }.onFailure {
+            Log.i("Failed: Hook candidate background left margin")
             Log.i(it)
         }
     }
@@ -404,6 +500,17 @@ internal object WeTypeResourceHooks {
             view.paddingEnd,
             view.paddingBottom
         )
+    }
+
+    private fun resolveCandidateBackgroundLeftMarginPx(itemRoot: Any): Int {
+        val context = runCatching {
+            itemRoot.invokeMethodAs<Context>("k")
+        }.getOrNull() ?: return 0
+        return TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_DIP,
+            WeTypeSettings.getCandidateBackgroundLeftMarginDpXposed().toFloat(),
+            context.resources.displayMetrics
+        ).roundToInt()
     }
 
     private fun applyOpaqueSettingKeyboardBackground(target: Any?) {
@@ -490,6 +597,9 @@ internal object WeTypeResourceHooks {
         getModuleResources: (Resources) -> Resources
     ): Drawable? {
         val drawableName = runCatching { resources.getResourceEntryName(drawableResId) }.getOrNull() ?: return null
+        if (drawableName == "io") {
+            return WeTypeIconDrawable()
+        }
         val replacementResId = drawableReplacements[drawableName] ?: return null
         val replacementDrawable = getModuleResources(resources).getDrawable(replacementResId, null)
         return replacementDrawable.constantState?.newDrawable(resources, theme)?.mutate()
@@ -572,9 +682,7 @@ internal object WeTypeResourceHooks {
     }
 
     private fun resolvedGroupColor(group: WeTypeAppearanceColorGroup): Int {
-        val color = WeTypeSettings.getAppearanceColorXposed(group.id)
-        if (!group.isKeyColorGroup) return color
-        return withForcedAlpha(color, WeTypeSettings.getKeyColorHookAlphaXposed())
+        return WeTypeSettings.getAppearanceColorXposed(group.id)
     }
 
     private fun withForcedAlpha(color: Int, alpha: Int): Int = Color.argb(
