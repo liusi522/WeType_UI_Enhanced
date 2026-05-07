@@ -1,6 +1,5 @@
 name: Build MIUI IME Unlock APK
 
-于:
   push:
     分支: [ main, master ]
   pull_request:
