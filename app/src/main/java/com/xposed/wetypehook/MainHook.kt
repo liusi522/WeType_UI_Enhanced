@@ -7,6 +7,7 @@ import android.content.res.AssetManager
 import android.content.res.Configuration
 import android.content.res.Resources
 import android.graphics.Color
+import android.graphics.Rect
 import android.inputmethodservice.InputMethodService
 import android.os.Binder
 import android.os.Bundle
@@ -21,6 +22,7 @@ import android.view.WindowInsets
 import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.PopupWindow
 import com.xposed.wetypehook.wetype.hook.WeTypeResourceHooks
 import com.xposed.wetypehook.wetype.hook.WeTypeUpdateHooks
 import com.xposed.wetypehook.wetype.hook.WeTypeWindowHooks
@@ -98,6 +100,14 @@ class MainHook : XposedModule() {
     private data class FullscreenAreaLayout(val height: Int, val weight: Float)
     private val originalFullscreenAreaLayouts = WeakHashMap<ViewGroup, FullscreenAreaLayout>()
     private val adjustedImeContentViews = WeakHashMap<ViewGroup, WeakReference<View>>()
+    private data class BottomIconTranslation(var original: Float, var applied: Float)
+    private val bottomIconTranslations = WeakHashMap<View, BottomIconTranslation>()
+    private data class KeyboardGeometryAccess(
+        val keys: Field,
+        val drawRect: Method,
+        val visible: Method
+    )
+    private val keyboardGeometryAccess = mutableMapOf<Class<*>, KeyboardGeometryAccess?>()
     private val miuiBottomFrameViews = WeakHashMap<
         ViewGroup,
         Triple<WeakReference<ViewGroup>, WeakReference<View>, WeakReference<View>>
@@ -275,7 +285,7 @@ class MainHook : XposedModule() {
         }
 
         HookEnvironment.withHookScope("miui.dynamic-loader") {
-            hookInputMethodModuleManager(isNonCustomize)
+            hookInputMethodModuleManager(packageName)
         }
 
         Log.i("Hook MIUI IME Done!")
@@ -352,7 +362,7 @@ class MainHook : XposedModule() {
         } ?: Log.e("Failed:Class not found: InputMethodServiceInjector")
     }
 
-    private fun hookInputMethodModuleManager(isNonCustomize: Boolean) {
+    private fun hookInputMethodModuleManager(packageName: String) {
         runCatching {
             findMethod("android.inputmethodservice.InputMethodModuleManager") {
                 name == "loadDex" && parameterTypes.sameAs(ClassLoader::class.java, String::class.java)
@@ -366,7 +376,7 @@ class MainHook : XposedModule() {
                         targetClassLoader.invokeMethodAs<Any?>("addDexPath", dexPath)
                     }
                     HookEnvironment.withHookScope("miui.dynamic-bottom") {
-                        installBottomManagerHooks(targetClassLoader, isNonCustomize)
+                        installBottomManagerHooks(targetClassLoader, packageName)
                     }
                     param.result = null
                 }.onFailure {
@@ -385,7 +395,8 @@ class MainHook : XposedModule() {
             Class.forName(INPUT_METHOD_BOTTOM_MANAGER, true, classLoader)
         }.isSuccess
 
-    private fun installBottomManagerHooks(classLoader: ClassLoader, isNonCustomize: Boolean) {
+    private fun installBottomManagerHooks(classLoader: ClassLoader, packageName: String) {
+        val isNonCustomize = packageName !in miuiImeList
         hookDeleteNotSupportIme(
             "$INPUT_METHOD_BOTTOM_MANAGER\$MiuiSwitchInputMethodListener",
             classLoader
@@ -401,6 +412,40 @@ class MainHook : XposedModule() {
             hookMiuiBottomInsetCompatibility(bottomManagerClass)
         }
         hookSupportImeList(bottomManagerClass)
+        if (packageName == WETYPE_PACKAGE) hookMiuiClipboardMaterial(bottomManagerClass)
+    }
+
+    private fun hookMiuiClipboardMaterial(clazz: Class<*>) {
+        val token = classHookToken("clipboardMaterial", clazz)
+        if (!installedHookTokens.add(token)) return
+        runCatching {
+            val enabled = clazz.getDeclaredMethod("isHyperMaterialEnabled")
+            val popup = clazz.getDeclaredField("sClipboardWindow")
+            val inputAreaHidden = popup.type.getDeclaredField("mInputAreaHidden")
+            if (inputAreaHidden.type != Boolean::class.javaPrimitiveType ||
+                enabled.returnType != Boolean::class.javaPrimitiveType ||
+                !Modifier.isStatic(enabled.modifiers) || !Modifier.isStatic(popup.modifiers) ||
+                !PopupWindow::class.java.isAssignableFrom(popup.type)
+            ) return@runCatching
+            popup.isAccessible = true
+            inputAreaHidden.isAccessible = true
+            enabled.hookReturnConstant(true)
+            var previousWindow = WeakReference<PopupWindow>(null)
+            WeTypeWindowHooks.setMiuiClipboardVisibilityProvider {
+                val window = (popup.get(null) as? PopupWindow)?.also {
+                    if (previousWindow.get() !== it) previousWindow = WeakReference(it)
+                } ?: previousWindow.get()
+                // Native dismissal restores the input area after its exit transition.
+                // Bottom-view recreation may clear the static reference before that.
+                val active = window != null && (window.isShowing || inputAreaHidden.getBoolean(window))
+                if (!active) previousWindow.clear()
+                active
+            }
+        }.onFailure {
+            installedHookTokens.remove(token)
+            Log.i("Failed:Hook MIUI clipboard material")
+            Log.i(it)
+        }
     }
 
     private fun hookMiuiBottomInsetCompatibility(clazz: Class<*>) {
@@ -467,14 +512,23 @@ class MainHook : XposedModule() {
         val token = "miuiBottomRootMeasurement"
         if (!installedHookTokens.add(token)) return
         runCatching {
-            findMethod("com.android.internal.policy.DecorView") {
+            val measure = findMethod("com.android.internal.policy.DecorView") {
                 name == "onMeasure" && parameterTypes.sameAs(Int::class.java, Int::class.java)
-            }.hookBefore { param ->
+            }
+            measure.hookBefore { param ->
                 val inputFrame = imeInputFramesByDecor[param.thisObject]?.get() ?: return@hookBefore
                 // Normalize before the window measures either sibling. Doing this after
                 // layout exposes an unadjusted IME height until the next traversal.
                 // One window-level hook also avoids intercepting each child measurement.
                 reconcileMiuiBottomFrame(inputFrame)
+            }
+            findMethod("com.android.internal.policy.DecorView") {
+                name == "onLayout" && parameterTypes.sameAs(
+                    Boolean::class.java, Int::class.java, Int::class.java, Int::class.java, Int::class.java
+                )
+            }.hookAfter { param ->
+                val inputFrame = imeInputFramesByDecor[param.thisObject]?.get() ?: return@hookAfter
+                reconcileMiuiBottomIcons(inputFrame)
             }
         }.onFailure {
             installedHookTokens.remove(token)
@@ -498,7 +552,119 @@ class MainHook : XposedModule() {
         }
         val inputFrames = currentInputFrame?.let(::listOf)
             ?: miuiBottomFrameViews.keys.toList()
-        inputFrames.forEach(::reconcileMiuiBottomFrame)
+        inputFrames.forEach { inputFrame ->
+            reconcileMiuiBottomFrame(inputFrame)
+            reconcileMiuiBottomIcons(inputFrame)
+        }
+    }
+
+    private fun reconcileMiuiBottomIcons(inputFrame: ViewGroup) {
+        if (inputFrame.context.packageName != WETYPE_PACKAGE) return
+        val bottomArea = miuiBottomFrameViews[inputFrame]?.third?.get() ?: return
+        val padding = if (inputFrame.visibility == View.VISIBLE && bottomArea.visibility == View.VISIBLE) {
+            resolveWeTypeKeyBottomPadding(inputFrame)
+        } else 0
+
+        val icons = mutableListOf<View>()
+        fun collect(view: View) {
+            if (view is android.widget.ImageView && view.id != View.NO_ID) {
+                val name = runCatching { view.resources.getResourceName(view.id) }.getOrNull()
+                if (name == "com.miui.phrase:id/input_bottom_button_left" ||
+                    name == "com.miui.phrase:id/input_bottom_button_right"
+                ) icons += view
+            }
+            if (view is ViewGroup) {
+                for (index in 0 until view.childCount) collect(view.getChildAt(index))
+            }
+        }
+        if (padding > 0) collect(bottomArea)
+        bottomIconTranslations.keys.toList().filterNot(icons::contains).forEach(::restoreMiuiBottomIcon)
+        icons.forEach { icon ->
+            val translation = bottomIconTranslations.getOrPut(icon) {
+                BottomIconTranslation(icon.translationY, icon.translationY)
+            }
+            if (icon.translationY != translation.applied) translation.original = icon.translationY
+            val target = translation.original - padding / 2f
+            translation.applied = target
+            if (icon.translationY != target) {
+                icon.translationY = target
+            }
+        }
+    }
+
+    private fun resolveWeTypeKeyBottomPadding(inputFrame: ViewGroup): Int {
+        // Self-drawn keys keep their padding inside drawRect, not View.paddingBottom.
+        var bottom = 0
+        fun collect(view: View) {
+            if (view.visibility != View.VISIBLE) return
+            if (view.javaClass.name.startsWith("com.tencent.wetype.plugin.hld.")) {
+                val access = resolveKeyboardGeometryAccess(view.javaClass)
+                if (access != null) runCatching {
+                    val keys = access.keys.get(view) as? Map<*, *> ?: return@runCatching
+                    val keyBottom = keys.values.maxOfOrNull { key ->
+                        if (key == null || access.visible.invoke(key) != true) return@maxOfOrNull 0
+                        val rect = access.drawRect.invoke(key) as? Rect ?: return@maxOfOrNull 0
+                        if (rect.isEmpty || rect.top < 0 || rect.bottom > view.height) 0 else rect.bottom
+                    } ?: 0
+                    if (keyBottom > 0) {
+                        val bounds = Rect(0, 0, view.width, keyBottom)
+                        inputFrame.offsetDescendantRectToMyCoords(view, bounds)
+                        bottom = maxOf(bottom, bounds.bottom)
+                    }
+                }
+            }
+            if (view is ViewGroup) {
+                for (index in 0 until view.childCount) collect(view.getChildAt(index))
+            }
+        }
+        collect(inputFrame)
+        return if (bottom > 0) (inputFrame.height - bottom).coerceAtLeast(0) else 0
+    }
+
+    private fun resolveKeyboardGeometryAccess(type: Class<*>): KeyboardGeometryAccess? {
+        if (keyboardGeometryAccess.containsKey(type)) return keyboardGeometryAccess[type]
+        val access = runCatching {
+            // The public accessor identifies the self-draw base class across host versions.
+            val owner = type.getMethod("getActionButton").declaringClass
+            val metadata = kotlinMetadataStrings(owner)
+            val index = metadata.indexOf("imeButtonMap")
+            if (index < 1) return@runCatching null
+            val keys = owner.getDeclaredField(metadata[index - 1])
+                .takeIf { Map::class.java.isAssignableFrom(it.type) } ?: return@runCatching null
+            val keyType = owner.getMethod("getActionButton").returnType
+            val drawRect = resolveKeyPropertyGetter(keyType, "drawRect", Rect::class.java)
+                ?: return@runCatching null
+            val visible = resolveKeyPropertyGetter(keyType, "isVisible", Boolean::class.javaPrimitiveType!!)
+                ?: return@runCatching null
+            keys.isAccessible = true
+            KeyboardGeometryAccess(keys, drawRect, visible)
+        }.getOrNull()
+        keyboardGeometryAccess[type] = access
+        return access
+    }
+
+    private fun resolveKeyPropertyGetter(type: Class<*>, property: String, resultType: Class<*>): Method? {
+        val metadata = kotlinMetadataStrings(type)
+        val index = metadata.indexOf(property)
+        if (index < 0) return null
+        return (index - 1 downTo maxOf(0, index - 4)).firstNotNullOfOrNull { offset ->
+            type.declaredMethods.firstOrNull {
+                it.name == metadata[offset] && it.parameterTypes.isEmpty() && it.returnType == resultType
+            }
+        }?.apply { isAccessible = true }
+    }
+
+    private fun kotlinMetadataStrings(type: Class<*>): Array<String> {
+        val metadata = type.declaredAnnotations.firstOrNull {
+            it.annotationClass.java.name == "kotlin.Metadata"
+        } ?: return emptyArray()
+        @Suppress("UNCHECKED_CAST")
+        return metadata.annotationClass.java.getMethod("d2").invoke(metadata) as Array<String>
+    }
+
+    private fun restoreMiuiBottomIcon(icon: View) {
+        val translation = bottomIconTranslations.remove(icon) ?: return
+        if (icon.translationY == translation.applied) icon.translationY = translation.original
     }
 
     private fun reconcileMiuiBottomFrame(inputFrame: ViewGroup) {
@@ -613,7 +779,9 @@ class MainHook : XposedModule() {
         if (rootView !is LinearLayout || rootView.orientation != LinearLayout.VERTICAL ||
             fullscreenArea.parent !== rootView || inputFrame.parent !== rootView ||
             bottomArea.parent !== rootView || fullscreenArea.visibility != View.INVISIBLE ||
-            inputFrame.visibility != View.VISIBLE || bottomArea.visibility != View.VISIBLE ||
+            (inputFrame.visibility != View.VISIBLE &&
+                !(inputFrame.visibility == View.INVISIBLE && WeTypeWindowHooks.isMiuiClipboardActive())) ||
+            bottomArea.visibility != View.VISIBLE ||
             fullscreenArea.layoutParams !is LinearLayout.LayoutParams ||
             inputFrame.paddingBottom != 0
         ) return false
@@ -729,6 +897,15 @@ class MainHook : XposedModule() {
 
     private fun hookWeTypeIntentEntry() {
         runCatching {
+            findMethod("android.app.Activity") {
+                name == "onNewIntent" && parameterTypes.contentEquals(arrayOf(Intent::class.java))
+            }.hookAfter { param ->
+                val activity = param.thisObject as? Activity ?: return@hookAfter
+                val intent = param.args[0] as? Intent ?: return@hookAfter
+                if (intent.getBooleanExtra(EXTRA_OPEN_WETYPE_EMBEDDED_SETTINGS, false)) {
+                    activity.intent = intent
+                }
+            }
             findMethod("android.app.Activity") {
                 name == "onResume" && parameterTypes.isEmpty()
             }.hookAfter { param ->
@@ -1140,7 +1317,7 @@ class MainHook : XposedModule() {
         bottomManagerClasses.forEach { bottomManagerClass ->
             val classLoader = bottomManagerClass.classLoader ?: return@forEach
             HookEnvironment.withHookScope("miui.dynamic-bottom") {
-                installBottomManagerHooks(classLoader, isNonCustomize)
+                installBottomManagerHooks(classLoader, packageName)
             }
         }
         return if (isNonCustomize) bottomManagerClasses else emptyList()
@@ -1231,6 +1408,8 @@ class MainHook : XposedModule() {
     }.getOrDefault(emptyList())
 
     private fun cleanupExternalState(): Boolean = runOnMainThreadBlocking {
+        bottomIconTranslations.keys.toList().forEach(::restoreMiuiBottomIcon)
+        keyboardGeometryAccess.clear()
         miuiBottomFrameViews.forEach { (inputFrame, frameViews) ->
             frameViews.first.get()?.let { fullscreenArea ->
                 restoreMiuiBottomFrame(inputFrame, fullscreenArea)
